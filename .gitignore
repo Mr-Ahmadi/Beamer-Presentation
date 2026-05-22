@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Xcode user/state files
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xccheckout
+**/*.xcscmblueprint
+
+# Build artifacts
+DerivedData/
+build/
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# SwiftPM
+.swiftpm/
+
+# Local history backups of old separate repos
+.repo-history-backups/
