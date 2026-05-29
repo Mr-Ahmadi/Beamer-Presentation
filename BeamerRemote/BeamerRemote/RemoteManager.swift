@@ -10,6 +10,8 @@ class RemoteManager: NSObject, ObservableObject {
     @Published var isFullscreen = false
     @Published var isBlackout = false
     @Published var transitionName = "Push"
+    @Published var currentNote = ""
+    @Published var notesSourceName = "Not loaded"
 
     private var browser: MCNearbyServiceBrowser?
     private var session: MCSession?
@@ -60,7 +62,7 @@ extension RemoteManager: MCSessionDelegate {
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         guard let message = String(data: data, encoding: .utf8) else { return }
         DispatchQueue.main.async {
-            let components = message.split(separator: ":")
+            let components = message.split(separator: ":", omittingEmptySubsequences: false)
             if components.count >= 3, components[0] == "slide" {
                 self.currentSlide = Int(components[1]) ?? 0
                 self.totalSlides = Int(components[2]) ?? 0
@@ -74,12 +76,29 @@ extension RemoteManager: MCSessionDelegate {
             if components.count >= 6 {
                 self.transitionName = String(components[5]).capitalized
             }
+            if components.count >= 7 {
+                self.currentNote = Self.decodeBase64Component(String(components[6]))
+            } else {
+                self.currentNote = ""
+            }
+            if components.count >= 8 {
+                self.notesSourceName = Self.decodeBase64Component(String(components[7]))
+            } else {
+                self.notesSourceName = "Not loaded"
+            }
         }
     }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
     func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
     func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
+}
+
+private extension RemoteManager {
+    static func decodeBase64Component(_ value: String) -> String {
+        guard let data = Data(base64Encoded: value) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
 }
 
 extension RemoteManager: MCNearbyServiceBrowserDelegate {

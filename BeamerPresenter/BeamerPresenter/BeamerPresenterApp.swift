@@ -5,11 +5,11 @@ struct BeamerPresenterApp: App {
     @StateObject private var presentationManager = PresentationManager()
     
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "presenter-window") {
             ContentView()
                 .environmentObject(presentationManager)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.automatic)
     }
 }

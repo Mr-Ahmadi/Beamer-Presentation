@@ -1,11 +1,13 @@
 # macOS
 .DS_Store
 
-# Xcode user/state files
-**/xcuserdata/
-**/*.xcuserstate
-**/*.xccheckout
-**/*.xcscmblueprint
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcbkptlist
+*.xcworkspace/xcuserdata/
 
 # Build artifacts
 DerivedData/
@@ -14,8 +16,26 @@ build/
 *.dSYM
 *.dSYM.zip
 
-# SwiftPM
+# Swift / SwiftPM
 .swiftpm/
+.build/
+Package.resolved
 
-# Local history backups of old separate repos
+# CocoaPods
+Pods/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Tools
 .repo-history-backups/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local

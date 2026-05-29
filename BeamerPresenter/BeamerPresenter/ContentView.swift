@@ -1,232 +1,407 @@
 import SwiftUI
 import PDFKit
 import AppKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
+    private enum ImportKind {
+        case pdf
+        case notes
+    }
+
     private struct ScreenOption: Identifiable {
         let id: Int
         let title: String
     }
 
     @EnvironmentObject var presentationManager: PresentationManager
-    @State private var showingFilePicker = false
+    @Environment(\.openWindow) private var openWindow
+
+    @State private var showingFileImporter = false
+    @State private var activeImportKind: ImportKind = .pdf
     @State private var fullscreenWindow: NSWindow?
     @State private var fullscreenEventMonitor: Any?
     @State private var selectedScreenID: Int?
+    @State private var windowID = UUID()
+    @State private var isWindowRegistered = false
+
     private let presenterBackground = Color(red: 0.42, green: 0.42, blue: 0.42)
+    private let phoneAccent = Color(red: 0.16, green: 0.58, blue: 0.93)
 
     var body: some View {
         NavigationSplitView {
-            List {
-                Section("Controls") {
-                    Button(action: { showingFilePicker = true }) {
-                        Label("Open PDF", systemImage: "doc")
-                    }
-                    .keyboardShortcut("o", modifiers: .command)
-
-                    if presentationManager.pdfDocument != nil {
-                        Button(action: toggleFullscreen) {
-                            Label(
-                                presentationManager.isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen",
-                                systemImage: presentationManager.isFullscreen ? "rectangle.compress.vertical" : "rectangle.expand.vertical"
-                            )
-                        }
-                        .keyboardShortcut("f", modifiers: [.command, .shift])
-
-                        Button(action: { presentationManager.toggleBlackout() }) {
-                            Label(
-                                presentationManager.isBlackout ? "Disable Blackout" : "Blackout Slide",
-                                systemImage: presentationManager.isBlackout ? "lightbulb" : "lightbulb.slash"
-                            )
-                        }
-                        .keyboardShortcut("b", modifiers: [.command, .shift])
-                    }
+            ScrollView {
+                VStack(spacing: 24) {
+                    controlsSection
+                    transitionSection
+                    displaySection
+                    navigationSection
+                    notesSection
+                    nextSlideSection
+                    connectionSection
                 }
-
-                Section("Transition") {
-                    Picker("Style", selection: $presentationManager.transitionStyle) {
-                        ForEach(SlideTransitionStyle.allCases) { style in
-                            Text(style.title).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Section("Display") {
-                    Picker("Fullscreen Screen", selection: $selectedScreenID) {
-                        Text("Auto (External Preferred)").tag(nil as Int?)
-                        ForEach(screenOptions) { option in
-                            Text(option.title).tag(Optional(option.id))
-                        }
-                    }
-                    .pickerStyle(.menu)
-
-                    if screenOptions.count > 1 {
-                        HStack(spacing: 10) {
-                            Button("Primary") {
-                                selectedScreenID = primaryScreenID()
-                            }
-                            Button("External") {
-                                selectedScreenID = firstExternalScreenID()
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-
-                Section("Navigation") {
-                    HStack(spacing: 10) {
-                        Button(action: { presentationManager.firstSlide() }) {
-                            Image(systemName: "backward.end.fill")
-                        }
-                        .help("First Slide")
-
-                        Button(action: { presentationManager.previousSlide() }) {
-                            Image(systemName: "chevron.left")
-                        }
-                        .keyboardShortcut(.leftArrow, modifiers: [])
-
-                        Button(action: { presentationManager.nextSlide() }) {
-                            Image(systemName: "chevron.right")
-                        }
-                        .keyboardShortcut(.rightArrow, modifiers: [])
-
-                        Button(action: { presentationManager.lastSlide() }) {
-                            Image(systemName: "forward.end.fill")
-                        }
-                        .help("Last Slide")
-                    }
-                    .font(.title3)
-
-                    Text("Slide \(presentationManager.currentSlide + 1) of \(max(1, presentationManager.totalSlides))")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if presentationManager.totalSlides > 0 {
-                        ProgressView(
-                            value: Double(presentationManager.currentSlide + 1),
-                            total: Double(presentationManager.totalSlides)
-                        )
-                        .progressViewStyle(.linear)
-                        .frame(height: 4)
-                    }
-                }
-
-                if let pdfDocument = presentationManager.pdfDocument {
-                    Section("Next Slide") {
-                        if let nextPreview = PDFSlideRenderer.image(
-                            for: pdfDocument,
-                            index: min(presentationManager.currentSlide + 1, presentationManager.totalSlides - 1),
-                            targetSize: CGSize(width: 240, height: 150)
-                        ), presentationManager.currentSlide < presentationManager.totalSlides - 1 {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Image(nsImage: nextPreview)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxWidth: .infinity)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .strokeBorder(.white.opacity(0.2), lineWidth: 1)
-                                    }
-
-                                Text("Upcoming: Slide \(presentationManager.currentSlide + 2)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else {
-                            Text("Last slide reached")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Section("Connection") {
-                    Label(presentationManager.connectionStatus, systemImage: "antenna.radiowaves.left.and.right")
-                        .foregroundColor(presentationManager.connectionStatus.contains("Connected") ? .green : .secondary)
-                }
+                .padding(.vertical, 8)
             }
-            .listStyle(.sidebar)
-            .frame(minWidth: 280, idealWidth: 300)
+            .frame(minWidth: 310, idealWidth: 340)
         } detail: {
-            ZStack(alignment: .bottomTrailing) {
-                if let pdfDocument = presentationManager.pdfDocument {
-                    PresenterSlideCanvas(
-                        pdfDocument: pdfDocument,
-                        slideIndex: presentationManager.currentSlide,
-                        transitionStyle: presentationManager.transitionStyle,
-                        isBlackout: presentationManager.isBlackout
-                    )
-                    .edgesIgnoringSafeArea(.all)
-                    .background(presenterBackground)
-                } else {
-                    VStack(spacing: 18) {
-                        Image(systemName: "doc.richtext")
-                            .font(.system(size: 56))
-                            .foregroundStyle(.secondary)
-                        Text("Open a PDF to begin presenting")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                        Text("Use ⌘O to load your deck")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(presenterBackground)
-                }
-
-                if presentationManager.pdfDocument != nil {
-                    HStack(spacing: 8) {
-                        Text(presentationManager.transitionStyle.title)
-                            .font(.caption2)
-                        Text("\(presentationManager.currentSlide + 1) / \(max(1, presentationManager.totalSlides))")
-                            .font(.caption)
-                    }
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(14)
-                }
-            }
+            detailPane
         }
         .fileImporter(
-            isPresented: $showingFilePicker,
-            allowedContentTypes: [.pdf],
+            isPresented: $showingFileImporter,
+            allowedContentTypes: importerTypes,
             allowsMultipleSelection: false
         ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                guard url.startAccessingSecurityScopedResource() else {
-                    print("Failed to access the file")
-                    return
-                }
-                defer { url.stopAccessingSecurityScopedResource() }
-                presentationManager.loadPDF(url: url)
-            case .failure(let error):
-                print("Error loading PDF: \(error)")
+            switch activeImportKind {
+            case .pdf:
+                handleFileImport(result, handler: presentationManager.loadPDF(url:))
+            case .notes:
+                handleFileImport(result, handler: presentationManager.loadTeXNotes(url:))
             }
         }
-        .onChange(of: presentationManager.isFullscreen) { _, isEnabled in
-            if isEnabled {
+        .onChange(of: presentationManager.fullscreenOwnerID) { _, ownerID in
+            if ownerID == windowID {
                 openFullscreenWindow()
             } else {
                 closeFullscreenWindow()
             }
         }
+        .onAppear {
+            registerWindowIfNeeded()
+            presentationManager.markWindowActive(windowID)
+        }
         .onDisappear {
             closeFullscreenWindow()
+            presentationManager.unregisterWindow(windowID)
+            isWindowRegistered = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             if let selectedScreenID, screen(withID: selectedScreenID) == nil {
                 self.selectedScreenID = nil
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard let keyWindow = notification.object as? NSWindow else { return }
+            if fullscreenWindow === keyWindow {
+                return
+            }
+            presentationManager.markWindowActive(windowID)
+        }
+    }
+
+    private var controlsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Controls")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            
+            HStack(spacing: 10) {
+                controlButton("Open PDF", icon: "doc.richtext", tint: .gray) {
+                    activeImportKind = .pdf
+                    showingFileImporter = true
+                }
+                .keyboardShortcut("o", modifiers: .command)
+
+                controlButton("Load Notes", icon: "note.text", tint: .gray) {
+                    activeImportKind = .notes
+                    showingFileImporter = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+            .padding(.horizontal)
+
+            if presentationManager.notesLoaded {
+                HStack(spacing: 10) {
+                    Label(presentationManager.notesSourceDisplayName, systemImage: "note.text")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Clear") {
+                        presentationManager.clearNotes()
+                    }
+                    .buttonStyle(.borderless)
+                    .tint(.gray)
+                    .font(.caption)
+                }
+                .padding(.horizontal)
+            }
+
+            if presentationManager.pdfDocument != nil {
+                HStack(spacing: 10) {
+                    controlButton(
+                        presentationManager.fullscreenOwnerID == windowID ? "Exit Fullscreen" : "Fullscreen",
+                        icon: presentationManager.fullscreenOwnerID == windowID ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
+                        tint: .gray
+                    ) {
+                        toggleFullscreen()
+                    }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .disabled(!presentationManager.canEnterFullscreen(from: windowID))
+
+                    controlButton(
+                        presentationManager.isBlackout ? "Disable Blackout" : "Blackout Slide",
+                        icon: presentationManager.isBlackout ? "lightbulb.fill" : "lightbulb.slash",
+                        tint: .gray
+                    ) {
+                        presentationManager.toggleBlackout()
+                    }
+                    .keyboardShortcut("b", modifiers: [.command, .shift])
+                }
+                .padding(.horizontal)
+            }
+
+            if presentationManager.isFullscreen, presentationManager.fullscreenOwnerID != windowID {
+                Text("Another window is currently in fullscreen presentation mode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+            }
+        }
+    }
+
+    private var transitionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Transition")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            
+            Picker("Style", selection: $presentationManager.transitionStyle) {
+                ForEach(SlideTransitionStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+        }
+    }
+
+    private var displaySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Display")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            
+            Picker("Fullscreen Screen", selection: $selectedScreenID) {
+                Text("Auto (External Preferred)").tag(nil as Int?)
+                ForEach(screenOptions) { option in
+                    Text(option.title).tag(Optional(option.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .padding(.horizontal)
+
+            if screenOptions.count > 1 {
+                HStack(spacing: 10) {
+                    Button("Primary") {
+                        selectedScreenID = primaryScreenID()
+                    }
+                    .tint(.gray)
+                    
+                    Button("External") {
+                        selectedScreenID = firstExternalScreenID()
+                    }
+                    .tint(.gray)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private var navigationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Navigation")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            
+            HStack(spacing: 10) {
+                iconControlButton("backward.end.fill", "First Slide", tint: .gray) { presentationManager.firstSlide() }
+                iconControlButton("chevron.left", "Previous Slide", tint: .gray) { presentationManager.previousSlide() }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                iconControlButton("chevron.right", "Next Slide", tint: .gray) { presentationManager.nextSlide() }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                iconControlButton("forward.end.fill", "Last Slide", tint: .gray) { presentationManager.lastSlide() }
+            }
+            .padding(.horizontal)
+
+            Text("Slide \(presentationManager.currentSlide + 1) of \(max(1, presentationManager.totalSlides))")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+
+            if presentationManager.totalSlides > 0 {
+                ProgressView(
+                    value: Double(presentationManager.currentSlide + 1),
+                    total: Double(presentationManager.totalSlides)
+                )
+                .progressViewStyle(.linear)
+                .frame(height: 4)
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Current Notes")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            
+            if presentationManager.notesLoaded {
+                ScrollView {
+                    Text(formattedCurrentNote)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .lineSpacing(5)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+                }
+                .frame(minHeight: 130, maxHeight: .infinity)
+                .scrollBounceBehavior(.basedOnSize)
+            } else {
+                Text("Load a `.tex` file to show speaker notes per slide.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal)
+                    .padding()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var nextSlideSection: some View {
+        if let pdfDocument = presentationManager.pdfDocument {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Next Slide")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                
+                if let nextPreview = PDFSlideRenderer.image(
+                    for: pdfDocument,
+                    index: min(presentationManager.currentSlide + 1, presentationManager.totalSlides - 1),
+                    targetSize: CGSize(width: 240, height: 150)
+                ), presentationManager.currentSlide < presentationManager.totalSlides - 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Image(nsImage: nextPreview)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.2), lineWidth: 1)
+                            }
+
+                        Text("Upcoming: Slide \(presentationManager.currentSlide + 2)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                } else {
+                    Text("Last slide reached")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
+                }
+            }
+        }
+    }
+
+    private var connectionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Connection")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            
+            Label(presentationManager.connectionStatus, systemImage: "antenna.radiowaves.left.and.right")
+                .foregroundColor(presentationManager.connectionStatus.contains("Connected") ? .green : .secondary)
+                .padding(.horizontal)
+        }
+    }
+
+    private var detailPane: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if let pdfDocument = presentationManager.pdfDocument {
+                PresenterSlideCanvas(
+                    pdfDocument: pdfDocument,
+                    slideIndex: presentationManager.currentSlide,
+                    transitionStyle: presentationManager.transitionStyle,
+                    isBlackout: presentationManager.isBlackout
+                )
+                .edgesIgnoringSafeArea(.all)
+                .background(presenterBackground)
+            } else {
+                VStack(spacing: 18) {
+                    Image(systemName: "iphone.gen3.badge.play")
+                        .font(.system(size: 56, weight: .semibold))
+                        .foregroundStyle(phoneAccent)
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(phoneAccent.opacity(0.14))
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(phoneAccent.opacity(0.35), lineWidth: 1)
+                        }
+                    Text("Open a PDF to begin presenting")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("Use ⌘O for slides and ⇧⌘N for notes")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(presenterBackground)
+            }
+
+            if presentationManager.pdfDocument != nil {
+                HStack(spacing: 8) {
+                    Text(presentationManager.transitionStyle.title)
+                        .font(.caption2)
+                    Text("\(presentationManager.currentSlide + 1) / \(max(1, presentationManager.totalSlides))")
+                        .font(.caption)
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(14)
+            }
+        }
+    }
+
+    private func openNewPresenterWindow() {
+        // Close any existing presenter windows first
+        NSApplication.shared.windows.forEach { window in
+            if window.title == "Beamer Presenter" && window != NSApplication.shared.keyWindow {
+                window.close()
+            }
+        }
+        
+        // Open a new window
+        openWindow(id: "presenter-window")
+    }
+
+    private func registerWindowIfNeeded() {
+        guard !isWindowRegistered else { return }
+        presentationManager.registerWindow(windowID)
+        isWindowRegistered = true
     }
 
     private func toggleFullscreen() {
-        presentationManager.isFullscreen.toggle()
+        presentationManager.toggleFullscreen(for: windowID)
     }
 
     private func openFullscreenWindow() {
@@ -259,7 +434,7 @@ struct ContentView: View {
         window.contentView = hostingView
 
         fullscreenEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == 53, self.presentationManager.isFullscreen {
+            if event.keyCode == 53, self.presentationManager.fullscreenOwnerID == self.windowID {
                 self.closeFullscreenFromAnyAction()
                 return nil
             }
@@ -288,8 +463,37 @@ struct ContentView: View {
     }
 
     private func closeFullscreenFromAnyAction() {
-        presentationManager.isFullscreen = false
+        presentationManager.exitFullscreen(for: windowID)
         closeFullscreenWindow()
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>, handler: (URL) -> Void) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer {
+                if scoped {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            handler(url)
+        case .failure(let error):
+            print("Error loading file: \(error)")
+        }
+    }
+
+    private var importerTypes: [UTType] {
+        switch activeImportKind {
+        case .pdf:
+            return [.pdf]
+        case .notes:
+            return [texType, .plainText]
+        }
+    }
+
+    private var texType: UTType {
+        UTType(filenameExtension: "tex") ?? .plainText
     }
 
     private var screenOptions: [ScreenOption] {
@@ -314,7 +518,7 @@ struct ContentView: View {
 
     private func firstExternalScreenID() -> Int? {
         guard let primaryID = primaryScreenID() else { return nil }
-        return NSScreen.screens.first { screenID(for: $0) != primaryID }.flatMap { screenID(for: $0) }
+        return NSScreen.screens.first { screenID(for: $0) != primaryID }.flatMap(screenID(for:))
     }
 
     private func preferredFullscreenScreen() -> NSScreen? {
@@ -336,6 +540,72 @@ struct ContentView: View {
         return isPrimary ? "\(screen.localizedName) (Primary • \(sizeLabel))" : "\(screen.localizedName) (\(sizeLabel))"
     }
 
+    private func controlButton(_ title: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .padding(.horizontal, 10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [tint.opacity(0.95), tint.opacity(0.72)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var formattedCurrentNote: String {
+        let raw = presentationManager.currentNote
+        guard !raw.isEmpty else { return "" }
+
+        return raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\\\\", with: "\n")
+            .replacingOccurrences(of: "\\newline", with: "\n")
+            .replacingOccurrences(of: "\\par", with: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func iconControlButton(_ symbol: String, _ helpText: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.title3.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [tint.opacity(0.95), tint.opacity(0.72)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        }
+        .contentShape(Rectangle())
+        .help(helpText)
+    }
 }
 
 private enum PDFSlideRenderer {
@@ -443,53 +713,15 @@ struct FullscreenPDFView: View {
                 VStack {
                     HStack {
                         HStack(spacing: 12) {
-                            Button(action: onDismiss) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.title2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(10)
-                                    .background(Color.gray.opacity(0.85), in: Circle())
-                                    .overlay {
-                                        Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                                    }
+                            fullscreenOverlayButton("xmark.circle.fill", tint: .gray, action: onDismiss)
+                            fullscreenOverlayButton("chevron.left", tint: .gray) { presentationManager.previousSlide() }
+                            fullscreenOverlayButton("chevron.right", tint: .gray) { presentationManager.nextSlide() }
+                            fullscreenOverlayButton(
+                                presentationManager.isBlackout ? "lightbulb.fill" : "lightbulb.slash",
+                                tint: .gray
+                            ) {
+                                presentationManager.toggleBlackout()
                             }
-                            .buttonStyle(.plain)
-
-                            Button(action: { presentationManager.previousSlide() }) {
-                                Image(systemName: "chevron.left")
-                                    .font(.title2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(10)
-                                    .background(Color.gray.opacity(0.85), in: Circle())
-                                    .overlay {
-                                        Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                                    }
-                            }
-                            .buttonStyle(.plain)
-
-                            Button(action: { presentationManager.nextSlide() }) {
-                                Image(systemName: "chevron.right")
-                                    .font(.title2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(10)
-                                    .background(Color.gray.opacity(0.85), in: Circle())
-                                    .overlay {
-                                        Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                                    }
-                            }
-                            .buttonStyle(.plain)
-
-                            Button(action: { presentationManager.toggleBlackout() }) {
-                                Image(systemName: presentationManager.isBlackout ? "lightbulb.fill" : "lightbulb.slash")
-                                    .font(.title2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(10)
-                                    .background(Color.gray.opacity(0.85), in: Circle())
-                                    .overlay {
-                                        Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                                    }
-                            }
-                            .buttonStyle(.plain)
                         }
                         Spacer()
                     }
@@ -555,5 +787,29 @@ struct FullscreenPDFView: View {
             presentationManager.toggleBlackout()
             return .handled
         }
+    }
+
+    private func fullscreenOverlayButton(_ symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(10)
+                .background(
+                    LinearGradient(
+                        colors: [tint.opacity(0.95), tint.opacity(0.75)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    in: Circle()
+                )
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.22), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: 2)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
     }
 }
