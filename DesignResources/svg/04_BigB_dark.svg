@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1E1E24"/><stop offset="50%" stop-color="#2D2D35"/><stop offset="100%" stop-color="#3A3A45"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bgGrad)"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="222.5" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+  <!-- Slide frame outline -->
+  <rect x="152" y="172" width="720" height="560" rx="32" fill="none" stroke="#FFFFFF" stroke-width="8" opacity="0.15"/>
+  <rect x="152" y="172" width="720" height="90" rx="32" fill="none" stroke="#FFFFFF" stroke-width="8" opacity="0.15"/>
+  <rect x="152" y="222" width="720" height="40" fill="none" stroke="#FFFFFF" stroke-width="8" opacity="0.15"/>
+  <!-- Window dots on frame -->
+  <circle cx="208" cy="217" r="10" fill="#FFFFFF" opacity="0.12"/>
+  <circle cx="248" cy="217" r="10" fill="#FFFFFF" opacity="0.12"/>
+  <circle cx="288" cy="217" r="10" fill="#FFFFFF" opacity="0.12"/>
+  <!-- Big B letterform -->
+  <g fill="#FFFFFF">
+    <rect x="355" y="262" width="80" height="420" rx="40"/>
+    <rect x="420" y="265" width="170" height="175" rx="85"/>
+    <rect x="420" y="505" width="170" height="175" rx="85"/>
+  </g>
+  <!-- Subtle highlight on B -->
+  <g fill="#2D2D35" opacity="0.3">
+    <rect x="365" y="272" width="20" height="100" rx="10"/>
+    <rect x="430" y="278" width="60" height="50" rx="25"/>
+    <rect x="430" y="518" width="60" height="50" rx="25"/>
+  </g>
+</svg>

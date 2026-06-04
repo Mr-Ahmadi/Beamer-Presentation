@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#F8F9FA"/><stop offset="50%" stop-color="#E9ECEF"/><stop offset="100%" stop-color="#DEE2E6"/></linearGradient>
+    <linearGradient id="beamGrad" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="rgba(45,27,105,0)"/><stop offset="100%" stop-color="rgba(45,27,105,0.06)"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bgGrad)"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="222.5" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="3"/>
+  <!-- Light beam triangle -->
+  <polygon points="512,720 282,260 742,260" fill="url(#beamGrad)"/>
+  <polygon points="512,680 312,280 712,280" fill="rgba(255,255,255,0.03)"/>
+  <!-- Small slide at top of beam -->
+  <rect x="362" y="190" width="300" height="220" rx="16" fill="#FFFFFF"/>
+  <rect x="362" y="190" width="300" height="44" rx="16" fill="rgba(0,0,0,0.03)"/>
+  <rect x="362" y="220" width="300" height="14" fill="rgba(0,0,0,0.03)"/>
+  <circle cx="390" cy="212" r="5" fill="rgba(0,0,0,0.08)"/>
+  <circle cx="410" cy="212" r="5" fill="rgba(0,0,0,0.08)"/>
+  <circle cx="430" cy="212" r="5" fill="rgba(0,0,0,0.08)"/>
+  <g fill="#2D1B69">
+    <rect x="475" y="272" width="34" height="100" rx="17"/>
+    <rect x="505" y="274" width="62" height="48" rx="24"/>
+    <rect x="505" y="330" width="62" height="48" rx="24"/>
+  </g>
+</svg>

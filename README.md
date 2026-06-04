@@ -2,6 +2,8 @@
 
 Wireless presentation system with macOS presenter and iOS remote companion apps.
 
+![Screenshot](Screenshot.png)
+
 **BeamerPresenter** loads and presents PDF slides with speaker notes.  
 **BeamerRemote** controls slides wirelessly over your local network via `MultipeerConnectivity`.
 
