@@ -15,7 +15,6 @@ struct ContentView: View {
     }
 
     @EnvironmentObject var presentationManager: PresentationManager
-    @Environment(\.openWindow) private var openWindow
 
     @State private var showingFileImporter = false
     @State private var activeImportKind: ImportKind = .pdf
@@ -24,18 +23,24 @@ struct ContentView: View {
     @State private var selectedScreenID: Int?
     @State private var windowID = UUID()
     @State private var isWindowRegistered = false
+    @State private var now = Date()
+    @State private var isDropTargeted = false
 
-    private let presenterBackground = Color(red: 0.42, green: 0.42, blue: 0.42)
-    private let phoneAccent = Color(red: 0.16, green: 0.58, blue: 0.93)
+    private let presenterBackground = Color.black
+    private let slideSurfaceBackground = Color(nsColor: .windowBackgroundColor)
+    private let phoneAccent = Color.accentColor
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationSplitView {
             ScrollView {
                 VStack(spacing: 24) {
+                    fileSection
                     controlsSection
                     transitionSection
                     displaySection
                     navigationSection
+                    timerSection
                     notesSection
                     nextSlideSection
                     connectionSection
@@ -65,6 +70,15 @@ struct ContentView: View {
                 closeFullscreenWindow()
             }
         }
+        .onChange(of: selectedScreenID) { _, _ in
+            // Move the fullscreen window if the user picks another display mid-show.
+            if presentationManager.fullscreenOwnerID == windowID {
+                openFullscreenWindow()
+            }
+        }
+        .onChange(of: presentationManager.pdfDocument) { _, _ in
+            PDFSlideRenderer.invalidate()
+        }
         .onAppear {
             registerWindowIfNeeded()
             presentationManager.markWindowActive(windowID)
@@ -85,6 +99,54 @@ struct ContentView: View {
                 return
             }
             presentationManager.markWindowActive(windowID)
+        }
+        .onReceive(timer) { value in
+            now = value
+        }
+        .onDrop(of: [.pdf], isTargeted: $isDropTargeted) { providers in
+            handlePDFDrop(providers)
+        }
+        .alert("Couldn't open file", isPresented: Binding(
+            get: { presentationManager.lastError != nil },
+            set: { if !$0 { presentationManager.lastError = nil } }
+        )) {
+            Button("OK", role: .cancel) { presentationManager.lastError = nil }
+        } message: {
+            Text(presentationManager.lastError ?? "")
+        }
+    }
+
+    private var fileSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Presentation")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+
+            HStack(spacing: 8) {
+                Image(systemName: presentationManager.pdfDocument == nil ? "doc" : "doc.richtext.fill")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(presentationManager.pdfFileName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(presentationManager.totalSlides > 0 ? "\(presentationManager.totalSlides) slides" : "No slides loaded")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isDropTargeted ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.08))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isDropTargeted ? Color.accentColor : Color.gray.opacity(0.2), lineWidth: 1)
+            }
+            .padding(.horizontal)
         }
     }
 
@@ -220,11 +282,13 @@ struct ContentView: View {
             
             HStack(spacing: 10) {
                 iconControlButton("backward.end.fill", "First Slide", tint: .gray) { presentationManager.firstSlide() }
+                    .keyboardShortcut(.home, modifiers: [])
                 iconControlButton("chevron.left", "Previous Slide", tint: .gray) { presentationManager.previousSlide() }
                     .keyboardShortcut(.leftArrow, modifiers: [])
                 iconControlButton("chevron.right", "Next Slide", tint: .gray) { presentationManager.nextSlide() }
                     .keyboardShortcut(.rightArrow, modifiers: [])
                 iconControlButton("forward.end.fill", "Last Slide", tint: .gray) { presentationManager.lastSlide() }
+                    .keyboardShortcut(.end, modifiers: [])
             }
             .padding(.horizontal)
 
@@ -241,6 +305,29 @@ struct ContentView: View {
                 .frame(height: 4)
                 .padding(.horizontal)
             }
+        }
+    }
+
+    private var timerSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Timer")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+
+            HStack {
+                Label(elapsedLabel, systemImage: "timer")
+                    .font(.title3.monospacedDigit())
+                    .foregroundStyle(.primary)
+                Spacer()
+                Button("Reset") {
+                    presentationManager.resetTimer()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(presentationManager.presentationStartedAt == nil)
+            }
+            .padding(.horizontal)
         }
     }
 
@@ -357,13 +444,13 @@ struct ContentView: View {
                         }
                     Text("Open a PDF to begin presenting")
                         .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("Use ⌘O for slides and ⇧⌘N for notes")
+                        .foregroundStyle(.primary)
+                    Text("Use ⌘O for slides and ⇧⌘N for notes — or drag a PDF here")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(presenterBackground)
+                .background(slideSurfaceBackground)
             }
 
             if presentationManager.pdfDocument != nil {
@@ -382,18 +469,6 @@ struct ContentView: View {
         }
     }
 
-    private func openNewPresenterWindow() {
-        // Close any existing presenter windows first
-        NSApplication.shared.windows.forEach { window in
-            if window.title == "Beamer Presenter" && window != NSApplication.shared.keyWindow {
-                window.close()
-            }
-        }
-        
-        // Open a new window
-        openWindow(id: "presenter-window")
-    }
-
     private func registerWindowIfNeeded() {
         guard !isWindowRegistered else { return }
         presentationManager.registerWindow(windowID)
@@ -402,6 +477,60 @@ struct ContentView: View {
 
     private func toggleFullscreen() {
         presentationManager.toggleFullscreen(for: windowID)
+    }
+
+    private var elapsedLabel: String {
+        guard let start = presentationManager.presentationStartedAt else { return "00:00" }
+        let elapsed = max(0, Int(now.timeIntervalSince(start)))
+        let hours = elapsed / 3600
+        let minutes = (elapsed % 3600) / 60
+        let seconds = elapsed % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    private func handlePDFDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) {
+            provider.loadItem(forTypeIdentifier: UTType.pdf.identifier, options: nil) { item, _ in
+                DispatchQueue.main.async {
+                    let url: URL? = {
+                        if let data = item as? Data {
+                            let tmp = FileManager.default.temporaryDirectory
+                                .appendingPathComponent(UUID().uuidString)
+                                .appendingPathExtension("pdf")
+                            if (try? data.write(to: tmp)) != nil { return tmp }
+                            return nil
+                        }
+                        if let url = item as? URL { return url }
+                        if let nsURL = item as? NSURL, let url = nsURL as URL? { return url }
+                        return nil
+                    }()
+                    guard let url else { return }
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    presentationManager.loadPDF(url: url)
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+            return true
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                DispatchQueue.main.async {
+                    guard let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                          url.pathExtension.lowercased() == "pdf" else { return }
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    presentationManager.loadPDF(url: url)
+                }
+            }
+            return true
+        }
+        return false
     }
 
     private func openFullscreenWindow() {
@@ -417,11 +546,10 @@ struct ContentView: View {
         )
 
         window.level = .screenSaver
-        window.backgroundColor = .gray
+        window.backgroundColor = .black
         window.isOpaque = true
         window.hasShadow = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        window.isReleasedWhenClosed = false
         window.title = "Beamer Presenter - Fullscreen"
 
         let fullscreenView = FullscreenPDFView {
@@ -455,11 +583,12 @@ struct ContentView: View {
 
         if let window = fullscreenWindow {
             window.orderOut(nil)
-            window.close()
             fullscreenWindow = nil
         }
 
-        NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
+        if presentationManager.fullscreenOwnerID == nil {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func closeFullscreenFromAnyAction() {
@@ -479,7 +608,7 @@ struct ContentView: View {
             }
             handler(url)
         case .failure(let error):
-            print("Error loading file: \(error)")
+            presentationManager.lastError = "Couldn't open file: \(error.localizedDescription)"
         }
     }
 
@@ -568,16 +697,7 @@ struct ContentView: View {
     }
 
     private var formattedCurrentNote: String {
-        let raw = presentationManager.currentNote
-        guard !raw.isEmpty else { return "" }
-
-        return raw
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .replacingOccurrences(of: "\\\\", with: "\n")
-            .replacingOccurrences(of: "\\newline", with: "\n")
-            .replacingOccurrences(of: "\\par", with: "\n\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        BeamerTextFormatting.plainText(from: presentationManager.currentNote)
     }
 
     private func iconControlButton(_ symbol: String, _ helpText: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -609,13 +729,29 @@ struct ContentView: View {
 }
 
 private enum PDFSlideRenderer {
+    private static let cache = NSCache<NSString, NSImage>()
+
     static func image(for document: PDFDocument, index: Int, targetSize: CGSize) -> NSImage? {
         guard index >= 0, index < document.pageCount, let page = document.page(at: index) else { return nil }
-        let renderSize = CGSize(
-            width: max(1, targetSize.width * (NSScreen.main?.backingScaleFactor ?? 2)),
-            height: max(1, targetSize.height * (NSScreen.main?.backingScaleFactor ?? 2))
-        )
-        return page.thumbnail(of: renderSize, for: .mediaBox)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        // Bucket size to keep cache hits stable across tiny layout changes.
+        let bucket: CGFloat = 160
+        let bw = max(1, Int((targetSize.width * scale / bucket).rounded()) * Int(bucket))
+        let bh = max(1, Int((targetSize.height * scale / bucket).rounded()) * Int(bucket))
+        let key = "\(ObjectIdentifier(document).hashValue)-\(index)-\(bw)x\(bh)" as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        let renderSize = CGSize(width: CGFloat(bw), height: CGFloat(bh))
+        let image = page.thumbnail(of: renderSize, for: .mediaBox)
+        cache.setObject(image, forKey: key)
+        // Keep memory bounded; thumbnails are cheap to re-render.
+        cache.countLimit = 24
+        return image
+    }
+
+    static func invalidate() {
+        cache.removeAllObjects()
     }
 }
 
@@ -627,7 +763,7 @@ struct PresenterSlideCanvas: View {
 
     @State private var displayedSlideIndex: Int = 0
     @State private var transitionDirection: SlideDirection = .forward
-    private let presenterBackground = Color(red: 0.42, green: 0.42, blue: 0.42)
+    private let presenterBackground = Color.black
 
     var body: some View {
         GeometryReader { proxy in
@@ -685,7 +821,7 @@ struct FullscreenPDFView: View {
                 )
                 .edgesIgnoringSafeArea(.all)
             } else {
-                Color(red: 0.42, green: 0.42, blue: 0.42).edgesIgnoringSafeArea(.all)
+                Color.black.edgesIgnoringSafeArea(.all)
             }
 
             HStack(spacing: 0) {
@@ -693,6 +829,7 @@ struct FullscreenPDFView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { presentationManager.previousSlide() }
                     .frame(maxWidth: .infinity)
+                    .help("Previous slide")
 
                 Color.clear
                     .contentShape(Rectangle())
@@ -702,11 +839,13 @@ struct FullscreenPDFView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
+                    .help("Toggle controls")
 
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { presentationManager.nextSlide() }
                     .frame(maxWidth: .infinity)
+                    .help("Next slide")
             }
 
             if controlsVisible {

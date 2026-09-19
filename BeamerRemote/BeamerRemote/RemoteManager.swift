@@ -29,19 +29,40 @@ class RemoteManager: NSObject, ObservableObject {
         browser?.startBrowsingForPeers()
     }
 
+    deinit {
+        browser?.stopBrowsingForPeers()
+        session?.disconnect()
+    }
+
     func connectToPeer(_ peer: MCPeerID) {
         guard let session = session else { return }
         browser?.invitePeer(peer, to: session, withContext: nil, timeout: 30)
     }
 
+    func disconnect() {
+        session?.disconnect()
+        // Recreate the session so a fresh invite can follow a manual disconnect.
+        if let peerID {
+            session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
+            session?.delegate = self
+        }
+    }
+
     func sendCommand(_ command: String) {
         guard let session = session, !session.connectedPeers.isEmpty else { return }
         guard let data = command.data(using: .utf8) else { return }
-        try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        } catch {
+            #if DEBUG
+            print("Beamer command '\(command)' failed: \(error.localizedDescription)")
+            #endif
+        }
     }
 
-    func sendHaptic() {
-        let impact = UIImpactFeedbackGenerator(style: .medium)
+    func sendHaptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
+        let impact = UIImpactFeedbackGenerator(style: style)
+        impact.prepare()
         impact.impactOccurred()
     }
 }
@@ -63,9 +84,14 @@ extension RemoteManager: MCSessionDelegate {
         guard let message = String(data: data, encoding: .utf8) else { return }
         DispatchQueue.main.async {
             let components = message.split(separator: ":", omittingEmptySubsequences: false)
-            if components.count >= 3, components[0] == "slide" {
-                self.currentSlide = Int(components[1]) ?? 0
-                self.totalSlides = Int(components[2]) ?? 0
+            guard components.count >= 3, components[0] == "slide" else { return }
+            let slide = Int(components[1]) ?? 0
+            let total = Int(components[2]) ?? 0
+            self.currentSlide = max(0, slide)
+            self.totalSlides = max(0, total)
+            // Clamp in case a jump raced with a deck reload.
+            if self.totalSlides > 0 {
+                self.currentSlide = min(self.currentSlide, self.totalSlides - 1)
             }
             if components.count >= 4 {
                 self.isFullscreen = components[3] == "1"
@@ -104,7 +130,7 @@ private extension RemoteManager {
 extension RemoteManager: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
         DispatchQueue.main.async {
-            if !self.availablePeers.contains(peerID) {
+            if !self.availablePeers.contains(where: { $0.displayName == peerID.displayName }) {
                 self.availablePeers.append(peerID)
             }
         }
@@ -112,7 +138,7 @@ extension RemoteManager: MCNearbyServiceBrowserDelegate {
 
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         DispatchQueue.main.async {
-            self.availablePeers.removeAll { $0 == peerID }
+            self.availablePeers.removeAll { $0.displayName == peerID.displayName }
         }
     }
 }

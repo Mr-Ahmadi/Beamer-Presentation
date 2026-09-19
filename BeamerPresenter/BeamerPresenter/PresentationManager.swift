@@ -60,6 +60,9 @@ class PresentationManager: NSObject, ObservableObject {
     @Published var currentSlide = 0
     @Published var totalSlides = 0
     @Published var pdfDocument: PDFDocument?
+    @Published var pdfFileName = "No file loaded"
+    @Published var lastError: String?
+    @Published var presentationStartedAt: Date?
     @Published var transitionStyle: SlideTransitionStyle = .push {
         didSet {
             if transitionStyle != oldValue {
@@ -101,6 +104,11 @@ class PresentationManager: NSObject, ObservableObject {
         setupConnectivity()
     }
 
+    deinit {
+        advertiser?.stopAdvertisingPeer()
+        session?.disconnect()
+    }
+
     func setupConnectivity() {
         peerID = MCPeerID(displayName: Host.current().localizedName ?? "Mac")
         session = MCSession(peer: peerID!, securityIdentity: nil, encryptionPreference: .required)
@@ -113,12 +121,28 @@ class PresentationManager: NSObject, ObservableObject {
     }
 
     func loadPDF(url: URL) {
-        guard let pdf = PDFDocument(url: url) else { return }
+        // Read inside the caller's security-scoped access window and keep
+        // an in-memory copy so the sandboxed PDFDocument doesn't depend on
+        // the file handle after access ends.
+        guard let data = try? Data(contentsOf: url) else {
+            lastError = "Couldn't read “\(url.lastPathComponent)”."
+            return
+        }
+        loadPDF(data: data, fileName: url.lastPathComponent)
+    }
+
+    func loadPDF(data: Data, fileName: String) {
+        guard let pdf = PDFDocument(data: data), pdf.pageCount > 0 else {
+            lastError = "“\(fileName)” isn't a readable PDF."
+            return
+        }
 
         pdfDocument = pdf
+        pdfFileName = fileName
         totalSlides = pdf.pageCount
         currentSlide = 0
         isBlackout = false
+        presentationStartedAt = Date()
         refreshCurrentNote()
 
         sendSlideUpdate()
@@ -138,9 +162,17 @@ class PresentationManager: NSObject, ObservableObject {
             notesText = nil
         }
 
-        guard let notesText else { return }
+        guard let notesText else {
+            lastError = "Couldn't read notes from “\(url.lastPathComponent)”."
+            return
+        }
 
-        notesBySlide = BeamerNotesParser.parseNotes(from: notesText)
+        let parsed = BeamerNotesParser.parseNotes(from: notesText)
+        guard !parsed.isEmpty else {
+            lastError = "No “\\begin{frame}” blocks with “\\note{…}” found in “\(url.lastPathComponent)”."
+            return
+        }
+        notesBySlide = parsed
         notesSourceDisplayName = url.lastPathComponent
         notesLoaded = true
         refreshCurrentNote()
@@ -192,6 +224,10 @@ class PresentationManager: NSObject, ObservableObject {
 
     func toggleBlackout() {
         isBlackout.toggle()
+    }
+
+    func resetTimer() {
+        presentationStartedAt = Date()
     }
 
     func registerWindow(_ id: UUID) {
@@ -246,7 +282,13 @@ class PresentationManager: NSObject, ObservableObject {
         let sourcePayload = Data(notesSourceDisplayName.utf8).base64EncodedString()
         let message = "slide:\(currentSlide):\(totalSlides):\(isFullscreen ? 1 : 0):\(isBlackout ? 1 : 0):\(transitionStyle.rawValue):\(notePayload):\(sourcePayload)"
         if let data = message.data(using: .utf8) {
-            try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+            do {
+                try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+            } catch {
+                #if DEBUG
+                print("Beamer slide update failed: \(error.localizedDescription)")
+                #endif
+            }
         }
     }
 
@@ -306,10 +348,11 @@ extension PresentationManager: MCSessionDelegate {
             case "toggle-blackout":
                 self.toggleBlackout()
             default:
-                if message.hasPrefix("goto:"),
-                   let indexStr = message.split(separator: ":").last,
-                   let index = Int(indexStr) {
-                    self.goToSlide(index)
+                if message.hasPrefix("goto:") {
+                    let indexStr = message.dropFirst("goto:".count)
+                    if let index = Int(indexStr.trimmingCharacters(in: .whitespaces)) {
+                        self.goToSlide(index)
+                    }
                 }
             }
         }
@@ -461,5 +504,89 @@ private enum BeamerNotesParser {
             .map { $0.trimmingCharacters(in: .whitespaces) }
 
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+enum BeamerTextFormatting {
+    /// Lightweight LaTeX → plain-text for speaker notes on both platforms.
+    static func plainText(from raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+        var text = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        text = text.replacingOccurrences(of: "\\\\", with: "\n")
+        text = text.replacingOccurrences(of: "\\newline", with: "\n")
+        text = text.replacingOccurrences(of: "\\par", with: "\n\n")
+        text = text.replacingOccurrences(of: "\\item", with: "\n• ")
+        // \command{inner} → inner (textbf, emph, underline, textit, ...).
+        text = replaceCommandContents(in: text)
+        // Remaining \commands → "" (or a space for line-ish commands).
+        text = stripRemainingCommands(in: text)
+        text = text.replacingOccurrences(of: "~", with: " ")
+        // Collapse 3+ newlines and trailing spaces per line.
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        text = lines.joined(separator: "\n")
+        while text.contains("\n\n\n") {
+            text = text.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func replaceCommandContents(in text: String) -> String {
+        var result = text
+        let pattern = #"\\[a-zA-Z]+\*?\{([^{}]*)\}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
+        // Iterate a few passes for nesting like \textbf{a \emph{b}}.
+        for _ in 0..<5 {
+            let range = NSRange(result.startIndex..., in: result)
+            let newResult = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "$1")
+            if newResult == result { break }
+            result = newResult
+        }
+        return result
+    }
+
+    private static func stripRemainingCommands(in text: String) -> String {
+        var result = ""
+        var i = text.startIndex
+        while i < text.endIndex {
+            if text[i] == "\\" {
+                var j = text.index(after: i)
+                var name = ""
+                while j < text.endIndex, text[j].isLetter {
+                    name.append(text[j])
+                    j = text.index(after: j)
+                }
+                // Skip [...] options and {...} args of leftover commands.
+                if j < text.endIndex, text[j] == "[" {
+                    var depth = 1
+                    j = text.index(after: j)
+                    while j < text.endIndex, depth > 0 {
+                        if text[j] == "[" { depth += 1 } else if text[j] == "]" { depth -= 1 }
+                        j = text.index(after: j)
+                    }
+                }
+                if j < text.endIndex, text[j] == "{" {
+                    var depth = 1
+                    j = text.index(after: j)
+                    while j < text.endIndex, depth > 0 {
+                        if text[j] == "{" { depth += 1 } else if text[j] == "}" { depth -= 1 }
+                        j = text.index(after: j)
+                    }
+                }
+                // Keep a space for commands that act as separators.
+                if name == "hline" || name == "vspace" || name == "hspace" {
+                    result.append(" ")
+                }
+                i = j
+            } else if text[i] == "{" || text[i] == "}" || text[i] == "$" {
+                i = text.index(after: i)
+            } else {
+                result.append(text[i])
+                i = text.index(after: i)
+            }
+        }
+        return result
     }
 }
